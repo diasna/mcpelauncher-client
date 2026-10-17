@@ -305,7 +305,9 @@ void WindowCallbacks::onTouchStart(int id, double x, double y) {
             sharedInputState.touchId = id;
             sharedInputState.touchUpdated = true;
 
-            if(sharedInputState.wantCaptureMouse.load()) {
+            // Touches on the menubar or over an ImGui window belong to ImGui
+            imGuiTouchCaptured = sharedInputState.wantCaptureMouse.load() || y < menubarsize;
+            if(imGuiTouchCaptured) {
                 return;
             }
         }
@@ -325,7 +327,10 @@ void WindowCallbacks::onTouchUpdate(int id, double x, double y) {
             sharedInputState.touchPosX = x;
             sharedInputState.touchPosY = y;
             sharedInputState.touchUpdated = true;
-            return;
+            // Only swallow the move if ImGui owns this touch, otherwise the game loses the finger
+            if(imGuiTouchCaptured) {
+                return;
+            }
         }
 #endif
         if(jniSupport.isGameActivityVersion()) {
@@ -346,7 +351,12 @@ void WindowCallbacks::onTouchEnd(int id, double x, double y) {
             sharedInputState.touchId = -1;
             sharedInputState.touchUpdated = true;
             imGuiTouchId = -1;
-            return;
+            bool captured = imGuiTouchCaptured;
+            imGuiTouchCaptured = false;
+            // Only swallow the release if ImGui owns this touch, otherwise the game keeps a stuck finger
+            if(captured) {
+                return;
+            }
         }
 #endif
         if(jniSupport.isGameActivityVersion()) {

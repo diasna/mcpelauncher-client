@@ -67,6 +67,8 @@ private:
         Unknown,
     };
     int imGuiTouchId = -1;
+    // true if ImGui consumed the touch down of imGuiTouchId, so the game never saw it
+    bool imGuiTouchCaptured = false;
     bool useRawInput = false;
     InputMode inputMode = InputMode::Unknown;
     InputMode forcedMode = InputMode::Unknown;
