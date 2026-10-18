@@ -76,6 +76,15 @@ private:
     // Fingers currently down, in the order they went down (= Android pointer index)
     std::vector<ActiveTouch> activeTouches;
     int64_t touchDownTime = 0;
+    struct PendingRelease {
+        int32_t id;
+        float x, y;
+        int64_t time;
+    };
+    // Releases held back because the touchscreen may only have lost the finger for a moment
+    std::vector<PendingRelease> pendingReleases;
+    // New finger id -> id of the dropped finger it continues
+    std::unordered_map<int32_t, int32_t> continuedTouches;
     bool useRawInput = false;
     InputMode inputMode = InputMode::Unknown;
     InputMode forcedMode = InputMode::Unknown;
@@ -87,7 +96,8 @@ private:
 
     void sendMouseEvent(int32_t source, int32_t deviceId, int32_t action, int32_t buttonState, float x, float y, float scrollY);
 
-    void sendTouchEvent(int32_t pointerId, int32_t action, float x, float y);
+    void sendTouchEvent(int32_t pointerId, int32_t action, float x, float y, int64_t time = 0);
+    void sendFingerEvent(int32_t pointerId, int32_t action, float x, float y);
 
 public:
     WindowCallbacks(GameWindow &window, JniSupport &jniSupport, FakeInputQueue &inputQueue);
@@ -99,6 +109,8 @@ public:
     void startSendEvents();
 
     void markRequeueGamepadInput() { needsQueueGamepadInput = true; }
+    // Sends finger releases that were held back and did not turn out to be a dropout
+    void flushPendingTouchReleases();
 
     void onWindowSizeCallback(int w, int h);
 

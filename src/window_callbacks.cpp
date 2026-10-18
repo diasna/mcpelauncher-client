@@ -6,6 +6,7 @@
 #include <log.h>
 #include <mcpelauncher/path_helper.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <string>
 #include "settings.h"
@@ -314,7 +315,7 @@ void WindowCallbacks::onTouchStart(int id, double x, double y) {
         }
 #endif
         if(jniSupport.isGameActivityVersion()) {
-            sendTouchEvent(id, AMOTION_EVENT_ACTION_DOWN, x, y - menubarsize);
+            sendFingerEvent(id, AMOTION_EVENT_ACTION_DOWN, x, y - menubarsize);
         } else {
             inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_TOUCHSCREEN, AMOTION_EVENT_ACTION_DOWN, id, x, y - menubarsize));
         }
@@ -335,7 +336,7 @@ void WindowCallbacks::onTouchUpdate(int id, double x, double y) {
         }
 #endif
         if(jniSupport.isGameActivityVersion()) {
-            sendTouchEvent(id, AMOTION_EVENT_ACTION_MOVE, x, y - menubarsize);
+            sendFingerEvent(id, AMOTION_EVENT_ACTION_MOVE, x, y - menubarsize);
         } else {
             inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_TOUCHSCREEN, AMOTION_EVENT_ACTION_MOVE, id, x, y - menubarsize));
         }
@@ -361,21 +362,89 @@ void WindowCallbacks::onTouchEnd(int id, double x, double y) {
         }
 #endif
         if(jniSupport.isGameActivityVersion()) {
-            sendTouchEvent(id, AMOTION_EVENT_ACTION_UP, x, y - menubarsize);
+            sendFingerEvent(id, AMOTION_EVENT_ACTION_UP, x, y - menubarsize);
         } else {
             inputQueue.addEvent(FakeMotionEvent(AINPUT_SOURCE_TOUCHSCREEN, AMOTION_EVENT_ACTION_UP, id, x, y - menubarsize));
         }
     }
 }
 
-void WindowCallbacks::sendTouchEvent(int32_t pointerId, int32_t action, float x, float y) {
+static int64_t steadyNowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// How long a released finger may be gone before the release is sent to the game.
+// Touchscreens like the Surface IPTS lose light touches for a scan or two, which the game would see as a tap.
+static constexpr int64_t touchDropoutNs = 100 * 1000 * 1000;
+
+void WindowCallbacks::sendFingerEvent(int32_t pointerId, int32_t action, float x, float y) {
+    int64_t now = window.getEventTime();
+    if(now == 0) {
+        now = steadyNowNs();
+    }
+    flushPendingTouchReleases();
+    if(action == AMOTION_EVENT_ACTION_DOWN) {
+        // A finger landing where one was just lost continues that finger
+        int w, h;
+        window.getWindowSize(w, h);
+        float maxDistance = 0.05f * std::hypot((float)w, (float)h);
+        for(auto it = pendingReleases.begin(); it != pendingReleases.end(); ++it) {
+            if(std::hypot(it->x - x, it->y - y) <= maxDistance) {
+                if(it->id != pointerId) {
+                    continuedTouches[pointerId] = it->id;
+                }
+                int32_t id = it->id;
+                pendingReleases.erase(it);
+                sendTouchEvent(id, AMOTION_EVENT_ACTION_MOVE, x, y, now);
+                return;
+            }
+        }
+        // A real new touch reusing the id of a lost finger, release the lost one first
+        for(auto it = pendingReleases.begin(); it != pendingReleases.end(); ++it) {
+            if(it->id == pointerId) {
+                PendingRelease release = *it;
+                pendingReleases.erase(it);
+                sendTouchEvent(release.id, AMOTION_EVENT_ACTION_UP, release.x, release.y, release.time);
+                break;
+            }
+        }
+    }
+    auto continued = continuedTouches.find(pointerId);
+    if(continued != continuedTouches.end()) {
+        int32_t id = continued->second;
+        if(action == AMOTION_EVENT_ACTION_UP) {
+            continuedTouches.erase(continued);
+        }
+        pointerId = id;
+    }
+    if(action == AMOTION_EVENT_ACTION_UP) {
+        pendingReleases.push_back({pointerId, x, y, now});
+        return;
+    }
+    sendTouchEvent(pointerId, action, x, y, now);
+}
+
+void WindowCallbacks::flushPendingTouchReleases() {
+    int64_t now = steadyNowNs();
+    for(auto it = pendingReleases.begin(); it != pendingReleases.end();) {
+        if(now - it->time >= touchDropoutNs) {
+            PendingRelease release = *it;
+            it = pendingReleases.erase(it);
+            sendTouchEvent(release.id, AMOTION_EVENT_ACTION_UP, release.x, release.y, release.time);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void WindowCallbacks::sendTouchEvent(int32_t pointerId, int32_t action, float x, float y, int64_t time) {
     // Build the event like Android does: every event carries all fingers that are down,
     // extra fingers use POINTER_DOWN/POINTER_UP and the timestamps are real.
     // The game relies on this to tell a tap from a swipe and for scroll momentum.
     // Events are only polled once per frame, so use the time the window system recorded for the event.
-    int64_t now = window.getEventTime();
+    int64_t now = time != 0 ? time : window.getEventTime();
     if(now == 0) {
-        now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        now = steadyNowNs();
     }
     auto it = std::find_if(activeTouches.begin(), activeTouches.end(), [pointerId](const ActiveTouch& t) { return t.id == pointerId; });
     if(action == AMOTION_EVENT_ACTION_DOWN) {

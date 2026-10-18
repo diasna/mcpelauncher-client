@@ -165,6 +165,7 @@ int FakeLooper::pollAll(int timeoutMillis, int *outFd, int *outEvents, void **ou
     }
     if(associatedWindowCallbacks != nullptr) {
         associatedWindowCallbacks->markRequeueGamepadInput();
+        associatedWindowCallbacks->flushPendingTouchReleases();
     }
     return hasCallback ? ALOOPER_POLL_CALLBACK : ALOOPER_POLL_TIMEOUT;
 }
