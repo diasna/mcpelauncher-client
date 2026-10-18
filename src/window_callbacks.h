@@ -69,6 +69,13 @@ private:
     int imGuiTouchId = -1;
     // true if ImGui consumed the touch down of imGuiTouchId, so the game never saw it
     bool imGuiTouchCaptured = false;
+    struct ActiveTouch {
+        int32_t id;
+        float x, y;
+    };
+    // Fingers currently down, in the order they went down (= Android pointer index)
+    std::vector<ActiveTouch> activeTouches;
+    int64_t touchDownTime = 0;
     bool useRawInput = false;
     InputMode inputMode = InputMode::Unknown;
     InputMode forcedMode = InputMode::Unknown;

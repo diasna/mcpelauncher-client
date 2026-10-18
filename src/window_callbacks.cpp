@@ -5,6 +5,7 @@
 #include <game_window_manager.h>
 #include <log.h>
 #include <mcpelauncher/path_helper.h>
+#include <algorithm>
 #include <cstdlib>
 #include <string>
 #include "settings.h"
@@ -368,17 +369,64 @@ void WindowCallbacks::onTouchEnd(int id, double x, double y) {
 }
 
 void WindowCallbacks::sendTouchEvent(int32_t pointerId, int32_t action, float x, float y) {
+    // Build the event like Android does: every event carries all fingers that are down,
+    // extra fingers use POINTER_DOWN/POINTER_UP and the timestamps are real.
+    // The game relies on this to tell a tap from a swipe.
+    int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    auto it = std::find_if(activeTouches.begin(), activeTouches.end(), [pointerId](const ActiveTouch& t) { return t.id == pointerId; });
+    if(action == AMOTION_EVENT_ACTION_DOWN) {
+        if(it != activeTouches.end()) {
+            // Missed the release of this finger, drop the stale entry
+            activeTouches.erase(it);
+        }
+        if(activeTouches.size() >= GAMEACTIVITY_MAX_NUM_POINTERS_IN_MOTION_EVENT) {
+            return;
+        }
+        if(activeTouches.empty()) {
+            touchDownTime = now;
+        }
+        activeTouches.push_back({pointerId, x, y});
+        it = activeTouches.end() - 1;
+    } else if(it == activeTouches.end()) {
+        // Move or release without a press, e.g. hovering the mouse with --emulate-touch
+        return;
+    }
+    it->x = x;
+    it->y = y;
+    int32_t index = (int32_t)(it - activeTouches.begin());
+    if(activeTouches.size() > 1) {
+        if(action == AMOTION_EVENT_ACTION_DOWN) {
+            action = AMOTION_EVENT_ACTION_POINTER_DOWN | (index << AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
+        } else if(action == AMOTION_EVENT_ACTION_UP) {
+            action = AMOTION_EVENT_ACTION_POINTER_UP | (index << AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
+        }
+    }
+
     GameActivityMotionEvent ev = {};
     ev.source = AINPUT_SOURCE_TOUCHSCREEN;
     ev.action = action;
-    ev.pointerCount = 1;
+    ev.eventTime = now;
+    ev.downTime = touchDownTime;
+    ev.pointerCount = (uint32_t)activeTouches.size();
     ev.deviceId = 0;
-    ev.pointers[0].id = pointerId;
-    ev.pointers[0].axisValues[AMOTION_EVENT_AXIS_X] = x;
-    ev.pointers[0].axisValues[AMOTION_EVENT_AXIS_Y] = y;
-    ev.pointers[0].rawX = x;
-    ev.pointers[0].rawY = y;
+    for(size_t i = 0; i < activeTouches.size(); i++) {
+        auto& p = ev.pointers[i];
+        p.id = activeTouches[i].id;
+        p.toolType = AMOTION_EVENT_TOOL_TYPE_FINGER;
+        p.axisValues[AMOTION_EVENT_AXIS_X] = activeTouches[i].x;
+        p.axisValues[AMOTION_EVENT_AXIS_Y] = activeTouches[i].y;
+        p.axisValues[AMOTION_EVENT_AXIS_PRESSURE] = 1.0f;
+        p.axisValues[AMOTION_EVENT_AXIS_SIZE] = 1.0f;
+        p.rawX = activeTouches[i].x;
+        p.rawY = activeTouches[i].y;
+    }
+    ev.precisionX = x;
+    ev.precisionY = y;
     jniSupport.sendMotionEvent(&ev);
+
+    if((action & AMOTION_EVENT_ACTION_MASK) == AMOTION_EVENT_ACTION_UP || (action & AMOTION_EVENT_ACTION_MASK) == AMOTION_EVENT_ACTION_POINTER_UP) {
+        activeTouches.erase(activeTouches.begin() + index);
+    }
 }
 
 static bool deadKey(KeyCode key) {
