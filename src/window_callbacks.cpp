@@ -371,8 +371,12 @@ void WindowCallbacks::onTouchEnd(int id, double x, double y) {
 void WindowCallbacks::sendTouchEvent(int32_t pointerId, int32_t action, float x, float y) {
     // Build the event like Android does: every event carries all fingers that are down,
     // extra fingers use POINTER_DOWN/POINTER_UP and the timestamps are real.
-    // The game relies on this to tell a tap from a swipe.
-    int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    // The game relies on this to tell a tap from a swipe and for scroll momentum.
+    // Events are only polled once per frame, so use the time the window system recorded for the event.
+    int64_t now = window.getEventTime();
+    if(now == 0) {
+        now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
     auto it = std::find_if(activeTouches.begin(), activeTouches.end(), [pointerId](const ActiveTouch& t) { return t.id == pointerId; });
     if(action == AMOTION_EVENT_ACTION_DOWN) {
         if(it != activeTouches.end()) {
